@@ -1,0 +1,86 @@
+# ESP32 Bluetooth Proxy for Home Assistant —— SICN 加热器接入
+# ---------------------------------------------------------------
+# 用途：让 HA 通过 ESP32 的蓝牙代理去“扫描 + 主动连接” SICN 加热器，
+#       替代原来 CSR 蓝牙棒直通 HA 虚拟机的方案。
+#       HA 的 Bluetooth 集成会自动把本代理纳为蓝牙来源，
+#       之前写的 custom_components/sicn_heater 无需任何改动即可走这条通道。
+#
+# 两种用法：
+#   A) 你已有 ESPHome 设备（最常见）：只把下面
+#      “# === 需追加的核心片段 ===” 之间的几行，合并进你现有的 YAML
+#      （保留你原有的 esp32/board/wifi/api/ota 不变），然后 OTA 更新。
+#   B) 从零烧录：改好 wifi、按实际芯片选 board，用 ESPHome Web 或 HA 插件烧录。
+
+substitutions:
+  name: "sicn-bt-proxy"
+  friendly_name: "SICN BT Proxy"
+
+esphome:
+  name: ${name}
+  name_add_mac_suffix: true
+  friendly_name: ${friendly_name}
+  includes:
+    - txpower.h
+  on_boot:
+    priority: -100  # 在 BLE 协议栈初始化完成后执行
+    then:
+      - lambda: |-
+          #include "txpower.h"
+          sicn_boost_tx_power();
+
+# —— 按你实际芯片改这一行（你已刷好 ESPHome，直接用你现有的即可）——
+#   ESP32-WROOM-32 -> esp32:    / board: esp32dev
+#   ESP32-C3       -> esp32_c3: / board: esp32-c3-devkitm-1
+#   ESP32-S3       -> esp32_s3: / board: esp32-s3-devkitc-1
+esp32:
+  board: esp32dev
+  framework:
+    # 与官方 bluetooth-proxy 镜像一致的 ESP-IDF 框架
+    # (昨天官方固件能连上加热器, 今天我编译的 arduino 版连不上 —— 框架是唯一变量)
+    type: esp-idf
+    # pico-d4 供电偏弱: BLE+WiFi 同时初始化电流峰值会触发欠压复位,
+    # 导致 OTA "成功"后 bootloader 回滚旧固件 —— 必须关掉欠压检测
+    sdkconfig_options:
+      CONFIG_ESP_BROWNOUT_DET: "n"
+
+# === 需追加的核心片段（已有设备只加这几行）========================
+esp32_ble_tracker:
+
+bluetooth_proxy:
+  active: true      # 必须 true：HA 要通过代理“主动连接”加热器并读写 GATT
+  # 关键：ESP32 会把 GATT 服务表缓存在 NVS 里，本设备的旧缓存**不含描述符**
+  # （FFF1 的 CCCD 句柄 10 被判为 Invalid handle），导致通知永远开不起来。
+  # 关掉缓存 → 每次连接重新做完整服务发现，才拿得到 CCCD。
+  cache_services: false
+# =================================================================
+
+logger:
+
+button:
+  - platform: restart
+    name: Restart
+
+# HA 通过 api 发现并接管本设备为蓝牙代理来源；若你原配置开了 API 加密，
+# 保留你自己的 key，不要留空。
+api:
+  # encryption:
+  #   key: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+ota:
+  - platform: esphome
+  # password: "你的 OTA 密码（如有）"
+
+wifi:
+  # 真实值放同目录 secrets.yaml（已被 .gitignore 排除），参考 secrets.yaml.example
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # 关键：ESP32 经典款 WiFi 省电模式会与 BLE 共存冲突，
+  # 挤占连接建立的时隙，导致 0x3e (failed to establish) —— 必须关掉
+  power_save_mode: none
+  # 可选：固定 IP，方便排查
+  # manual_ip:
+  #   static_ip: 192.168.3.50
+  #   gateway: 192.168.3.1
+  #   subnet: 255.255.255.0
+
+captive_portal:

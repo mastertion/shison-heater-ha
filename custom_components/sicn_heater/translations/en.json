@@ -1,0 +1,19 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "添加 SICN 加热器",
+        "description": "输入加热器的蓝牙 MAC 地址（可在手机 App 扫描弹窗、或 HA「蓝牙」集成里看到当前地址）。",
+        "data": {
+          "address": "MAC 地址 (如 12:34:56:78:9A:BC)"
+        }
+      }
+    },
+    "error": {
+      "invalid_address": "MAC 地址格式不正确，应为 12:34:56:78:9A:BC"
+    },
+    "abort": {
+      "already_configured": "该设备已配置"
+    }
+  }
+}

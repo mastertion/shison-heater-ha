@@ -1,0 +1,27 @@
+# ===== ESPHome / 编译产物 =====
+.esphome/
+*.bin
+*.elf
+*.map
+
+# ===== 密钥（务必不要提交）=====
+secrets.yaml
+*.key
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ===== 日志与临时文件 =====
+*.log
+*.bak
+*.bak[0-9]
+tmp_*.py
+*.b64
+
+# ===== IDE / 系统 =====
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
