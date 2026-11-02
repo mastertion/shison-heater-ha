@@ -196,7 +196,17 @@ class SicnHeaterBle:
             except asyncio.CancelledError:
                 raise
             except Exception as err:  # noqa: BLE001
-                _LOGGER.debug("SICN 连接异常: %s", err)
+                _LOGGER.debug("SICN 连接异常: %s", err or type(err).__name__)
+                self._fail_count = getattr(self, "_fail_count", 0) + 1
+                # 连续失败说明不是偶发抖动：两条链路都连不上时，多数是加热器的
+                # BLE 被别的终端占着（单连接设备），或蓝牙模块卡死 —— 只能人介入。
+                if self._fail_count in (5, 15) or self._fail_count % 30 == 0:
+                    _LOGGER.warning(
+                        "SICN 已连续 %d 次连接失败。加热器在广播但拒绝连接，"
+                        "常见原因：手机 SICN App 仍占着连接，或加热器蓝牙模块卡死。"
+                        "处理：断开手机 App / 关掉手机蓝牙；仍不行就给加热器断电 10 秒。",
+                        self._fail_count,
+                    )
                 # 失败后退避，但广播一到立刻重试（加热器广播很稀疏，不能干等）
                 try:
                     await asyncio.wait_for(self._adv_event.wait(), timeout=25)
@@ -235,6 +245,12 @@ class SicnHeaterBle:
             self._note_pick("ESP32 代理")
             return dev, True
         cached = async_ble_device_from_address(self.hass, self.address, connectable=True)
+        if cached is None:
+            # 设备转成「不可连接」广播后 HA 不再把它算作 connectable，
+            # 但对象仍在 BlueZ 里，仍值得试一次（设备恢复后能连上）
+            cached = async_ble_device_from_address(
+                self.hass, self.address, connectable=False
+            )
         if cached is not None:
             details = cached.details or {}
             if "path" in details:
@@ -243,9 +259,6 @@ class SicnHeaterBle:
             self._note_pick("ESP32 代理(缓存)")
             return cached, True
         path = "/org/bluez/hci0/dev_" + self.address.replace(":", "_").upper()
-        if (time.monotonic() - (self._last_adv_time or 0)) > 60:
-            _LOGGER.debug("SICN 广播超 60s 未更新，等下一轮广播再连")
-            return None, False
         self._note_pick("本机 hci0(路径兜底)")
         return BLEDevice(self.address, self.name or "SICN-HEATER", {"path": path}), False
 
@@ -266,13 +279,18 @@ class SicnHeaterBle:
                 and (time.monotonic() - self._last_adv_time) < 180
             )
             if not fresh:
-                if time.monotonic() - getattr(self, "_last_skip_log", 0) > 300:
+                # 广播回调可能长时间不触发（HA 的 adv 监听在设备转为「不可连接」广播后
+                # 常常就不再投递），此时不能死等：只要 BlueZ/代理侧还有该设备对象，
+                # 就每 60 秒盲试一次，避免设备恢复后永远不重连。
+                if time.monotonic() - getattr(self, "_last_blind_try", 0.0) < 60:
+                    return
+                self._last_blind_try = time.monotonic()
+                if time.monotonic() - getattr(self, "_last_skip_log", 0.0) > 300:
                     self._last_skip_log = time.monotonic()
                     _LOGGER.debug(
-                        "SICN 已 %.0f 秒没收到该设备广播，暂不尝试连接（等广播）",
+                        "SICN 已 %.0f 秒没收到该设备广播，改用缓存设备低频重试(60s/次)",
                         time.monotonic() - (self._last_adv_time or 0),
                     )
-                return
             device, via_proxy = self._pick_device()
             if device is None:
                 # hci0 没看到设备：不盲连，等 _on_adv 唤醒下一轮
@@ -300,7 +318,8 @@ class SicnHeaterBle:
                         client_cls.__name__,
                     )
                 try:
-                    await asyncio.wait_for(client.connect(), timeout=30)
+                    # 12s 足够（正常 1~3s 就完成）；30s 会让重连循环被单次失败拖死
+                    await asyncio.wait_for(client.connect(), timeout=12)
                 except BaseException:
                     if getattr(client, "disconnect", None) is not None:
                         try:
@@ -309,6 +328,7 @@ class SicnHeaterBle:
                             pass
                     raise
             self.client = client
+            self._fail_count = 0
             _LOGGER.info("SICN 连接成功: %s", self.address)
 
             # ---- 服务发现 + 完整描述符 dump（定位真实数据通道） ----
