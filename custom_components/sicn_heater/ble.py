@@ -38,7 +38,9 @@ def _real_client_class():
 from homeassistant.components.bluetooth import (
     BluetoothScanningMode,
     async_ble_device_from_address,
+    async_rediscover_address,
     async_register_callback,
+    async_scanner_devices_by_address,
 )
 from homeassistant.components.bluetooth.match import BluetoothCallbackMatcher
 from homeassistant.helpers.entity import DeviceInfo
@@ -61,6 +63,10 @@ CCCD_UUID = "00002902-0000-1000-8000-00805f9b34fb"
 # 没有响应，await 就此永久挂死 —— 表现为「连接成功」之后再无任何日志，
 # 既不重连也不刷新（20:31 拔插 ESP32 后实测踩过）。有超时才能自愈。
 GATT_TIMEOUT = 8.0
+
+# 建链超时（秒）。本机 hci0 对隐私地址(RPA)设备要先做地址解析，实测需要
+# 11~25s，偶尔更久；给到 30s 才不会把「慢」误判成「连不上」。
+CONNECT_TIMEOUT = 30.0
 
 # 只用本机 USB 蓝牙适配器(hci0)。不依赖任何 ESPHome/ESP32 蓝牙代理：
 # BlueZ 后端发现的设备对象 details 里带 D-Bus "path"，默认路由即走本地适配器；
@@ -95,6 +101,11 @@ class SicnHeaterBle:
         # （BlueZ 报 StartNotify 方法不存在），只有代理路径订阅得通。
         self._last_proxy_adv = None
         self._last_proxy_adv_time = 0.0
+        # 是否成功走过代理（连上过）→ 进入严格代理模式，不再往本机 hci0 漂
+        self._proxy_ever_ok = False
+        # 连续连接失败次数（用于退避提示与灰化本机回退）
+        self._fail_count = 0
+        self._last_blind_try = 0.0
         # 最近一次成功解析状态帧的时间（用于判断是否需要重连刷新）
         self._last_status = 0.0
         # 通知到达事件: 订阅后用于验证通知真的在流通(伪 CCCD 句柄校验)
@@ -198,6 +209,15 @@ class SicnHeaterBle:
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug("SICN 连接异常: %s", err or type(err).__name__)
                 self._fail_count = getattr(self, "_fail_count", 0) + 1
+                # 每失败 3 次让所有扫描器重新上报该地址的广播。
+                # 设备广播一直正常，但 ESP32 代理有时整天一条都不转发，
+                # 于是只能退到本机 hci0；rediscover 会把「要这个地址」
+                # 重新下发给每个 scanner，代理才会重新吐广播。
+                if self._fail_count % 3 == 0:
+                    try:
+                        async_rediscover_address(self.hass, self.address)
+                    except Exception as err2:  # noqa: BLE001
+                        _LOGGER.debug("SICN rediscover 失败: %s", err2)
                 # 连续失败说明不是偶发抖动：两条链路都连不上时，多数是加热器的
                 # BLE 被别的终端占着（单连接设备），或蓝牙模块卡死 —— 只能人介入。
                 if self._fail_count in (5, 15) or self._fail_count % 30 == 0:
@@ -233,17 +253,47 @@ class SicnHeaterBle:
             self._note_pick("ESP32 代理")
             return getattr(pa, "device", pa), True
 
+        # 代理一旦连通过，就进入「严格代理模式」：不再回退本机 hci0。
+        # 这台设备是单连接，两条链路交替会互相踢（一次切换断一次），
+        # 而 hci0 连隐私地址本身也不可靠（实测 device not found / 订阅失败）。
+        # 只有连续失败 12 次（约 12 分钟）确认代理确实没了才放开回退。
+        strict_proxy = (
+            getattr(self, "_proxy_ever_ok", False)
+            and getattr(self, "_fail_count", 0) < 12
+        )
+
+        # ---- 次选：直接翻「所有扫描器」的视图，按来源把代理挑出来 ----
+        # 光等 _on_adv 的广播不够：hci0 和 ESP32 代理会同时看到这台设备，
+        # HA 的地址查询只会返回「最优来源」那一个（hci0 信号 -75 常压过代理
+        # 的 -79），于是连接在两条链路之间来回漂移 —— 设备是单连接，
+        # 每次切换都会把对面的连接踢掉，表现就是「用一阵子断一次」。
+        # 这里显式遍历来源，只要代理手上有这台设备就优先用它。
+        proxy_dev, local_dev = self._devices_by_source()
+        if proxy_dev is not None:
+            self._note_pick("ESP32 代理(扫描器视图)")
+            return proxy_dev, True
+        if local_dev is not None:
+            if strict_proxy:
+                _LOGGER.debug(
+                    "SICN 严格代理模式：忽略本机 hci0（已连续失败 %d 次）",
+                    self._fail_count,
+                )
+            else:
+                self._note_pick("本机 hci0(扫描器视图)")
+                return local_dev, False
+
         last = self._last_adv
         # BlueZ 对未配对设备会很快清掉 D-Bus 对象，超过 60 秒的广播对象再去连
         # 只会得到 "device not found"，所以只认一分钟内的
         if last is not None and (time.monotonic() - self._last_adv_time) < 60:
             # BluetoothServiceInfoBleak 不是 BLEDevice 子类，要取 .device
             dev = getattr(last, "device", last)
-            if "path" in (getattr(dev, "details", None) or {}):
+            if "path" not in (getattr(dev, "details", None) or {}):
+                self._note_pick("ESP32 代理")
+                return dev, True
+            if not strict_proxy:
                 self._note_pick("本机 hci0")
                 return dev, False
-            self._note_pick("ESP32 代理")
-            return dev, True
         cached = async_ble_device_from_address(self.hass, self.address, connectable=True)
         if cached is None:
             # 设备转成「不可连接」广播后 HA 不再把它算作 connectable，
@@ -253,14 +303,52 @@ class SicnHeaterBle:
             )
         if cached is not None:
             details = cached.details or {}
-            if "path" in details:
+            if "path" not in details:
+                self._note_pick("ESP32 代理(缓存)")
+                return cached, True
+            if not strict_proxy:
                 self._note_pick("本机 hci0(缓存)")
                 return cached, False
-            self._note_pick("ESP32 代理(缓存)")
-            return cached, True
+        if strict_proxy:
+            return None, False
         path = "/org/bluez/hci0/dev_" + self.address.replace(":", "_").upper()
         self._note_pick("本机 hci0(路径兜底)")
         return BLEDevice(self.address, self.name or "SICN-HEATER", {"path": path}), False
+
+    def _devices_by_source(self):
+        """遍历所有扫描器视图，按来源分出 (代理设备, 本机设备)。
+
+        代理发现的设备对象没有 D-Bus "path"（bleak_esphome 的
+        EsphomeBLEDevice），本机 BlueZ 发现的才有。同一台设备可能被两条
+        链路同时看到，多个代理来源时取信号最好的那个。
+        """
+        proxy = None
+        proxy_rssi = -999
+        local = None
+        try:
+            cands = async_scanner_devices_by_address(
+                self.hass, self.address, connectable=True
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug("SICN 枚举扫描器来源失败: %s", err)
+            return None, None
+        for c in cands:
+            dev = getattr(c, "device", None) or getattr(c, "ble_device", None)
+            if dev is None:
+                continue
+            details = getattr(dev, "details", None) or {}
+            if "path" in details:
+                if local is None:
+                    local = dev
+                continue
+            adv = getattr(c, "advertisement", None)
+            rssi = getattr(adv, "rssi", None)
+            if rssi is None:
+                rssi = getattr(c, "rssi", None) or -999
+            if proxy is None or rssi > proxy_rssi:
+                proxy = dev
+                proxy_rssi = rssi
+        return proxy, local
 
     def _note_pick(self, how: str):
         """连接路径变化时打一条 info，方便一眼看出走的是代理还是本机。"""
@@ -293,8 +381,9 @@ class SicnHeaterBle:
                     )
             device, via_proxy = self._pick_device()
             if device is None:
-                # hci0 没看到设备：不盲连，等 _on_adv 唤醒下一轮
-                return
+                # 严格代理模式下宁可等代理广播，也不去碰本机 hci0。
+                # 抛出去让它计入失败次数，好让 rediscover / 退避逻辑跑起来。
+                raise RuntimeError("暂无可用的连接目标(等代理广播)")
             _LOGGER.debug(
                 "SICN 连接目标: %s (%s)",
                 self.address,
@@ -309,7 +398,7 @@ class SicnHeaterBle:
                 # 直接用原始 bleak 客户端 connect()，不经过 HA 的地址路由包装器，
                 # 也不经过 establish_connection（它会重新查广播缓存）。
                 client_cls = _real_client_class()
-                client = client_cls(device, timeout=35.0)
+                client = client_cls(device, timeout=CONNECT_TIMEOUT)
                 if getattr(self, "_client_cls_logged", False) is False:
                     self._client_cls_logged = True
                     _LOGGER.info(
@@ -318,8 +407,13 @@ class SicnHeaterBle:
                         client_cls.__name__,
                     )
                 try:
-                    # 12s 足够（正常 1~3s 就完成）；30s 会让重连循环被单次失败拖死
-                    await asyncio.wait_for(client.connect(), timeout=12)
+                    # 本机 hci0 连这台设备要 11~25s（BlueZ 对隐私地址要先做
+                    # 地址解析，比普通设备慢一个数量级）。曾改成 12s 想避免
+                    # 单次失败拖死循环，结果 18:05 实测卡在 12s 边界、
+                    # 每次必然 TimeoutError，从此再也连不上 —— 必须给足。
+                    await asyncio.wait_for(
+                        client.connect(), timeout=CONNECT_TIMEOUT + 5
+                    )
                 except BaseException:
                     if getattr(client, "disconnect", None) is not None:
                         try:
@@ -329,6 +423,9 @@ class SicnHeaterBle:
                     raise
             self.client = client
             self._fail_count = 0
+            if via_proxy:
+                # 记住「代理这条路真的通过」，后续不再往本机 hci0 漂
+                self._proxy_ever_ok = True
             _LOGGER.info("SICN 连接成功: %s", self.address)
 
             # ---- 服务发现 + 完整描述符 dump（定位真实数据通道） ----
@@ -649,16 +746,20 @@ class SicnHeaterBle:
     async def _disconnect(self):
         async with self._conn_lock:
             if self.client:
+                # 顺序不能反：必须先 stop_notify 再 disconnect。
+                # 先 disconnect 会让 stop_notify 必然失败，BlueZ 的 Notify
+                # 句柄就此残留在 Controller 上，下次连接报
+                # "org.bluez.Error.NotPermitted: Notify acquired"（实测 17:10）。
                 try:
-                    if self.client.is_connected:
-                        await self.client.disconnect()
-                except Exception:  # noqa: BLE001
-                    pass
-                try:
-                    if self._notify_char is not None:
+                    if self._notify_char is not None and self.client.is_connected:
                         await asyncio.wait_for(
                             self.client.stop_notify(self._notify_char), timeout=5
                         )
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    if self.client.is_connected:
+                        await asyncio.wait_for(self.client.disconnect(), timeout=10)
                 except Exception:  # noqa: BLE001
                     pass
                 self.client = None
