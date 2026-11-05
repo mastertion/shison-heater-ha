@@ -36,12 +36,12 @@
 ```
 ha/
 ├── hacs.json                        # HACS 自定义仓库清单（决定「一键安装」能不能用）
-├── brand/icon.png                   # HACS / HA 显示的集成图标
 ├── custom_components/sicn_heater/   # HA 自定义集成
 │   ├── manifest.json  __init__.py  config_flow.py  const.py
 │   ├── ble.py                       # BLE 连接 / 协议解析（核心）
 │   ├── climate.py  sensor.py  switch.py  binary_sensor.py  button.py
-│   └── translations/en.json
+│   ├── translations/en.json
+│   └── brand/icon.png               # 集成图标（HA 2026.3+ 从这里读，必须在此目录内）
 ├── esp32_bt_proxy.yaml              # ESP32 蓝牙代理的 ESPHome 配置
 ├── txpower.h                        # 提升 ESP32 BLE 发射功率（可选）
 ├── secrets.yaml.example             # 复制成 secrets.yaml 填你自己的 WiFi
@@ -64,9 +64,9 @@ ha/
 > 前提是 HA 里**已经装好 HACS**。如果 HACS 侧栏里根本没有 HACS 这一项，先按
 > [官方安装说明](https://hacs.xyz/docs/setup/download/) 装好它，再回来做第 1 步。
 >
-> 本仓库符合 HACS 自定义集成规范：根目录有 `hacs.json` 与 `brand/icon.png`，
-> `custom_components/` 下只有一个集成目录，`manifest.json` 带齐
-> `domain` / `documentation` / `issue_tracker` / `codeowners` / `name` / `version`。
+> 本仓库符合 HACS 自定义集成规范：根目录有 `hacs.json`，
+> `custom_components/` 下只有一个集成目录且内含 `brand/icon.png`（HA 2026.3+ 从此处读取图标），
+> `manifest.json` 带齐 `domain` / `documentation` / `issue_tracker` / `codeowners` / `name` / `version`。
 > GitHub Release 不是硬性要求（没有时 HACS 用默认分支），本仓库仍然每个版本都会发，
 > 方便在下载页里选择版本。
 
