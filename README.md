@@ -36,6 +36,7 @@
 ```
 ha/
 ├── hacs.json                        # HACS 自定义仓库清单（决定「一键安装」能不能用）
+├── brand/icon.png                   # HACS / HA 显示的集成图标
 ├── custom_components/sicn_heater/   # HA 自定义集成
 │   ├── manifest.json  __init__.py  config_flow.py  const.py
 │   ├── ble.py                       # BLE 连接 / 协议解析（核心）
@@ -55,12 +56,22 @@ ha/
 
 1. 打开 **HACS** → 右上角 `⋮` → **自定义存储库 / Custom repositories**
 2. 仓库地址填 `https://github.com/mastertion/shison-heater-ha`
+   （**末尾不要带 `.git`**，HACS 会把它当成仓库名的一部分而报「找不到仓库」）
 3. 类别选 **集成 / Integration** → 点「添加」
 4. 回到 HACS → **集成** → 搜索 `SICN` → 下载
 5. **重启 Home Assistant**（不是重载集成，必须重启）
 
-> 本仓库符合 HACS 自定义集成规范（根目录有 `hacs.json`、`manifest.json` 带 `version`、
-> 每个版本都有 GitHub Release），可以直接按上述步骤添加，不需要先装什么插件。
+> 前提是 HA 里**已经装好 HACS**。如果 HACS 侧栏里根本没有 HACS 这一项，先按
+> [官方安装说明](https://hacs.xyz/docs/setup/download/) 装好它，再回来做第 1 步。
+>
+> 本仓库符合 HACS 自定义集成规范：根目录有 `hacs.json` 与 `brand/icon.png`，
+> `custom_components/` 下只有一个集成目录，`manifest.json` 带齐
+> `domain` / `documentation` / `issue_tracker` / `codeowners` / `name` / `version`。
+> GitHub Release 不是硬性要求（没有时 HACS 用默认分支），本仓库仍然每个版本都会发，
+> 方便在下载页里选择版本。
+
+> **维护者提醒**：HACS 显示的版本来自 GitHub Release，不是 commit。改完代码要发新版：
+> 改 `manifest.json` 的 `version` → commit → 打 tag（如 `v1.0.1`）→ 建 GitHub Release。
 
 ### 方式二：手动拷贝
 
