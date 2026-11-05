@@ -8,7 +8,8 @@
       "service_uuid": "0000fff0-0000-1000-8000-00805f9b34fb"
     }
   ],
-  "documentation": "https://github.com/mastertion/shison-heater-control",
+  "documentation": "https://github.com/mastertion/shison-heater-ha",
+  "issue_tracker": "https://github.com/mastertion/shison-heater-ha/issues",
   "integration_type": "device",
   "iot_class": "local_push",
   "requirements": [],

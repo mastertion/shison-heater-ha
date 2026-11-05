@@ -1,5 +1,8 @@
 # SICN 加热器接入 Home Assistant（BLE）
 
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![GitHub Release](https://img.shields.io/github/v/release/mastertion/shison-heater-ha)](https://github.com/mastertion/shison-heater-ha/releases)
+
 让 Home Assistant 接管 **SICN-HEATER-\*** 蓝牙加热器：读当前水温、改目标温度、切设备显示单位，
 全部通过 BLE 完成，不依赖原厂手机 App。
 
@@ -32,6 +35,7 @@
 
 ```
 ha/
+├── hacs.json                        # HACS 自定义仓库清单（决定「一键安装」能不能用）
 ├── custom_components/sicn_heater/   # HA 自定义集成
 │   ├── manifest.json  __init__.py  config_flow.py  const.py
 │   ├── ble.py                       # BLE 连接 / 协议解析（核心）
@@ -47,6 +51,19 @@ ha/
 
 ## 1. 安装集成
 
+### 方式一：HACS 一键安装（推荐）
+
+1. 打开 **HACS** → 右上角 `⋮` → **自定义存储库 / Custom repositories**
+2. 仓库地址填 `https://github.com/mastertion/shison-heater-ha`
+3. 类别选 **集成 / Integration** → 点「添加」
+4. 回到 HACS → **集成** → 搜索 `SICN` → 下载
+5. **重启 Home Assistant**（不是重载集成，必须重启）
+
+> 本仓库符合 HACS 自定义集成规范（根目录有 `hacs.json`、`manifest.json` 带 `version`、
+> 每个版本都有 GitHub Release），可以直接按上述步骤添加，不需要先装什么插件。
+
+### 方式二：手动拷贝
+
 把 `custom_components/sicn_heater/` 整个目录放到 HA 配置目录下：
 
 ```
@@ -59,11 +76,13 @@ HAOS / 插件版可以用 **Samba Share**、**Terminal & SSH** 或 File Editor �
 ha core restart
 ```
 
+### 添加设备
+
 重启后：**设置 → 设备与服务 → 添加集成 → 搜「SICN 加热器」**，输入加热器 MAC 地址；
 若加热器正在广播，HA 也会直接弹「已发现」通知。
 
-> **改完 py 文件务必删掉 `__pycache__` 再重启**。只重启而不清缓存时，新增的实体不会出现，
-> 而且日志里没有任何报错 —— 这个坑排查起来非常费时间。
+> **手动改 py 文件后务必删掉 `__pycache__` 再重启**。只重启而不清缓存时，新增的实体不会出现，
+> 而且日志里没有任何报错 —— 这个坑排查起来非常费时间。（HACS 安装不受影响，它会整包替换。）
 
 ---
 
