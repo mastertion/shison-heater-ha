@@ -1,5 +1,7 @@
 # SICN 加热器接入 Home Assistant（BLE）
 
+<img src="https://raw.githubusercontent.com/mastertion/shison-heater-ha/main/custom_components/sicn_heater/brand/icon.png" width="96" alt="SICN 加热器图标" align="right">
+
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![GitHub Release](https://img.shields.io/github/v/release/mastertion/shison-heater-ha)](https://github.com/mastertion/shison-heater-ha/releases)
 
